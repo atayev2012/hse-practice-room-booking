@@ -10,3 +10,8 @@ async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit
 class Base(AsyncAttrs, DeclarativeBase):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+# create database
+async def init_models() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
