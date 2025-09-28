@@ -2,6 +2,7 @@ from gspread import Spreadsheet
 from datetime import date, timedelta, datetime, timezone
 from config import config
 import re
+from pprint import pprint
 
 data_dict = {}
 
@@ -26,26 +27,57 @@ async def load_and_parse(spreadsheet: Spreadsheet):
     start_date, end_date = await get_date_period(worksheets[0].acell("A1").value)
     dates_dict = await generate_list_of_dates(start_date, end_date)
 
-    for worksheet in worksheets:
+    # Fetch sheet metadata
+    metadata = spreadsheet.fetch_sheet_metadata(params={'fields': 'sheets.merges'})
+
+    for i, worksheet in enumerate(worksheets):
+
         if data_dict.get(worksheet.title) is None:
             # create key => building address Ex: 'Родионова', 'Б.Печерская', 'Костина', 'Львовская', 'Сормово'
             data_dict[worksheet.title] = {}
 
+            # load all values
             worksheet_data = worksheet.get_all_values()
+
+            # Copy data to empty merged cells
+            for merges in metadata["sheets"]:
+                for merge in merges["merges"]:
+                    if merge.get("sheetId") == worksheet.id or (merge.get("sheetId") is None and worksheet.id ==0):
+                        for i in range(merge["startRowIndex"], merge["endRowIndex"]):
+                            for j in range(merge["startColumnIndex"], merge["endColumnIndex"]):
+                                if not (i == merge["startRowIndex"] and j == merge["startColumnIndex"]):
+                                    worksheet_data[i][j] = worksheet_data[merge["startRowIndex"]][merge["startColumnIndex"]]
+
+            # start parsing
             for i, room in enumerate(worksheet_data[1][2:]):
                 if worksheet_data[2][i + 2] != "" or worksheet_data[3][i + 2] != "":
-                    if room.lower() == "коворкинг" or (room == "" and worksheet_data[1][i + 1].lower() == "коворкинг"):
+                    # Coworking title and Room Numbers entered wrong, that is the fix
+                    if room.lower() == "коворкинг":
                         room = worksheet_data[2][i + 2]
-                    # print(f"{worksheet.title}: {room}")
+                        worksheet_data[1][i + 2] = room.lower()
+                        worksheet_data[2][i + 2] = ""
+
+                    # add room number as key to specific worksheet (building)
                     data_dict[worksheet.title][room.lower()] = {}
+
+                    # some equipment is divided by "\n" and some by "/"
+                    if "/" in worksheet_data[2][i + 2]:
+                        # changing "/" to "\n"
+                        worksheet_data[2][i + 2] = worksheet_data[2][i + 2].replace("/", "\n")
+
+                    # add list of equipment to specific room
                     data_dict[worksheet.title][room.lower()]["equipment"] = [k.strip().lower() for k in worksheet_data[2][i + 2].split("\n") if k.strip() != ""]
+
+                    # add room capacity (max)
                     data_dict[worksheet.title][room.lower()]["capacity"] = worksheet_data[3][i + 2].lower()
 
                     # add dates
                     data_dict[worksheet.title][room.lower()]["dates"] = dates_dict.copy()
-        # print(f"{worksheet.title} => {worksheet_data}")
-        # print(worksheet.title)
-        # print(worksheet.get_all_values())
+
+
+
+
+
 
 
 # Verify if week is upper (else it is lower)
@@ -146,8 +178,8 @@ def parse_cell(sheet_cell: str) -> dict | None:
         return result
     else:
         # if cell is empty, return none
-        if sheet_cell == "":
-            return None
+        if sheet_cell == "" or sheet_cell == "***":
+            return result
 
         # if cell has "в 123***", then make free date
         if "в " in sheet_cell and "***" in sheet_cell:
@@ -219,6 +251,9 @@ def parse_cell(sheet_cell: str) -> dict | None:
             for item in dates:
                 days = item[0].split(",")
                 result["booked_dates"].extend([".".join([day, item[1]]) for day in days])
+        else:
+            if sheet_cell != "":
+                result["all"] = True
 
         return result
 
