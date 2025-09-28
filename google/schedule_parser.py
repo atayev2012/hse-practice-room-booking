@@ -1,6 +1,7 @@
 from gspread import Spreadsheet
 from datetime import date, timedelta, datetime, timezone
 from config import config
+import re
 
 data_dict = {}
 
@@ -60,7 +61,6 @@ async def is_upper_week(
 
     :return: 'True' if it is upper week, 'False' otherwise (None in case of date validation error)
     """
-
     if not isinstance(target_date, date) or target_date < education_start_date or target_date > education_end_date:
         return None
 
@@ -86,7 +86,6 @@ async def get_date_period(module_number_sheet: str, current_datetime: datetime =
 
     :return: None if current_datetime is out of module range and List[start_date, end_date] otherwise
     """
-
     # get module number as string
     module_number = module_number_sheet.split(" ")[0]
 
@@ -107,7 +106,6 @@ async def generate_list_of_dates(start_date: date, end_date: date) -> dict[date,
 
     :return: Dates with timeslots from start_date to end_date => {date: {time_slot: 0}}
     """
-
     dates = {}
     current_date = start_date
     while current_date <= end_date:
@@ -125,6 +123,104 @@ async def generate_list_of_dates(start_date: date, end_date: date) -> dict[date,
 
     return dates
 
+def parse_cell(sheet_cell: str) -> dict | None:
+    """
+    :param sheet_cell: The cell value from Google Sheet to be parsed
+    :return: dict | None if sheet_cell is empty.
+    Possible keys for dict: "upper_week", "lower_week", "start_date", "end_date", "booked_dates", "free_dates"
+    """
+    result = {}
+    # check for lower and upper week
+    if "--" in sheet_cell:
+        # check what is in upper and lower weeks and recursively rerun parse_cell with found items
+        m = re.match(r'(?s)\A(.*?)\r?\n?[ \t]*-+[ \t]*\r?\n?(.*)\Z', sheet_cell)
+        if m:
+            left = m.group(1).strip()
+            right = m.group(2).strip()
+
+            if left != "":
+                result["upper_week"] = parse_cell(m.group(1).strip())
+
+            if right != "":
+                result["lower_week"] = parse_cell(m.group(2).strip())
+        return result
+    else:
+        # if cell is empty, return none
+        if sheet_cell == "":
+            return None
+
+        # if cell has "в 123***", then make free date
+        if "в " in sheet_cell and "***" in sheet_cell:
+            pattern_in = r'(?P<date>\d{1,2}\.\d{1,2})\s+[вВ]\s+(?P<room>\d{3})\*{3}'
+            free_dates = re.findall(pattern_in, sheet_cell)
+            for item in free_dates:
+                if result.get("free_dates") is None:
+                    result["free_dates"] = []
+
+                result["free_dates"].append(item[0])
+                sheet_cell = sheet_cell.replace(f"{item[0]} в {item[1]}***", "").strip()
+
+        # if cell has "из 123***", then make booked date
+        if "из " in sheet_cell and "***" in sheet_cell:
+            pattern_out = r'(?P<date>\d{1,2}\.\d{1,2})\s+из\s+(?P<room>\d{3})\*{3}'
+            booked_dates = re.findall(pattern_out, sheet_cell)
+            for item in booked_dates:
+                if result.get("booked_dates") is None:
+                    result["booked_dates"] = []
+
+                result["booked_dates"].append(item[0])
+                sheet_cell = sheet_cell.replace(f"{item[0]} из {item[1]}***", "").strip()
+
+        # if cell has свобод
+        if "свобод" in sheet_cell:
+            pattern_free = r'(\d{1,2}\.\d{1,2})\s+свобод'
+            sheet_cell = sheet_cell.replace("(", '')
+            sheet_cell = sheet_cell.replace(")", '')
+            free_dates = re.findall(pattern_free, sheet_cell)
+            for item in free_dates:
+                if result.get("free_dates") is None:
+                    result["free_dates"] = []
+
+                result["free_dates"].append(item)
+                sheet_cell = sheet_cell.replace(f"{item} свобод", "").strip()
+
+        # if cell has "с dd.mm", then make start date
+        if "с " in sheet_cell:
+            pattern_from = r"с\s+(\d{2}\.\d{2})"
+            start_date = re.findall(pattern_from, sheet_cell)
+
+            result["start_date"] = start_date[0]
+
+        # if cell has "до dd.mm", then make end date
+        if "до " in sheet_cell:
+            pattern_till = r"до\s+(\d{2}\.\d{2})"
+            end_date = re.findall(pattern_till, sheet_cell)
+
+            result["end_date"] = end_date[0]
+
+
+        # if start_date and end_date was not decided
+        if result.get("start_date") is None and result.get("end_date") is None:
+            pattern_start_end = r"(\d{1,2}\.\d{1,2})\s*-\s*(\d{1,2}\.\d{1,2})"
+            start_end_dates = re.findall(pattern_start_end, sheet_cell)
+
+            if start_end_dates:
+                result["start_date"] = start_end_dates[0][0]
+                result["end_date"] = start_end_dates[0][1]
+
+        # if dates are written by comma
+        pattern_dates = r"((?:\d{1,2},?)+)\.(\d{1,2})"
+        dates = re.findall(pattern_dates, sheet_cell)
+
+        if dates:
+            if result.get("booked_dates") is None:
+                result["booked_dates"] = []
+
+            for item in dates:
+                days = item[0].split(",")
+                result["booked_dates"].extend([".".join([day, item[1]]) for day in days])
+
+        return result
 
 if __name__ == '__main__':
     pass
