@@ -2,25 +2,23 @@ from gspread import Spreadsheet
 from datetime import date, timedelta, datetime, timezone
 from config import config
 import re
-from pprint import pprint
+import copy
 
-data_dict = {}
-
-# result structure
-# data_dict = {
-#       building : {
-#           room_number: {
-#               date: {
-#                   time_slot: available or not
-#                       }
-#                   }
-#               }
-#           }
-
-# TODO: Fill the dates part based on Google Sheet
+temp_data = {}
 
 async def load_and_parse(spreadsheet: Spreadsheet):
-    global data_dict
+    global temp_data
+
+    time_slots = [
+        "08:00-09:20",
+        "09:30-10:50",
+        "11:10-12:30",
+        "13:00-14:20",
+        "14:40-16:00",
+        "16:20-17:40",
+        "18:10-19:30",
+        "19:40-21:00"
+    ]
 
     worksheets = spreadsheet.worksheets()
     # date period and whole list of dates
@@ -32,9 +30,9 @@ async def load_and_parse(spreadsheet: Spreadsheet):
 
     for i, worksheet in enumerate(worksheets):
 
-        if data_dict.get(worksheet.title) is None:
+        if temp_data.get(worksheet.title) is None:
             # create key => building address Ex: 'Родионова', 'Б.Печерская', 'Костина', 'Львовская', 'Сормово'
-            data_dict[worksheet.title] = {}
+            temp_data[worksheet.title] = {}
 
             # load all values
             worksheet_data = worksheet.get_all_values()
@@ -50,15 +48,16 @@ async def load_and_parse(spreadsheet: Spreadsheet):
 
             # start parsing
             for i, room in enumerate(worksheet_data[1][2:]):
+                room = room.lower()
                 if worksheet_data[2][i + 2] != "" or worksheet_data[3][i + 2] != "":
                     # Coworking title and Room Numbers entered wrong, that is the fix
-                    if room.lower() == "коворкинг":
+                    if room == "коворкинг":
                         room = worksheet_data[2][i + 2]
-                        worksheet_data[1][i + 2] = room.lower()
+                        worksheet_data[1][i + 2] = room
                         worksheet_data[2][i + 2] = ""
 
                     # add room number as key to specific worksheet (building)
-                    data_dict[worksheet.title][room.lower()] = {}
+                    temp_data[worksheet.title][room] = {}
 
                     # some equipment is divided by "\n" and some by "/"
                     if "/" in worksheet_data[2][i + 2]:
@@ -66,15 +65,118 @@ async def load_and_parse(spreadsheet: Spreadsheet):
                         worksheet_data[2][i + 2] = worksheet_data[2][i + 2].replace("/", "\n")
 
                     # add list of equipment to specific room
-                    data_dict[worksheet.title][room.lower()]["equipment"] = [k.strip().lower() for k in worksheet_data[2][i + 2].split("\n") if k.strip() != ""]
+                    temp_data[worksheet.title][room]["equipment"] = [k.strip().lower() for k in worksheet_data[2][i + 2].split("\n") if k.strip() != ""]
 
                     # add room capacity (max)
-                    data_dict[worksheet.title][room.lower()]["capacity"] = worksheet_data[3][i + 2].lower()
+                    temp_data[worksheet.title][room]["capacity"] = worksheet_data[3][i + 2].lower()
 
                     # add dates
-                    data_dict[worksheet.title][room.lower()]["dates"] = dates_dict.copy()
+                    temp_data[worksheet.title][room]["dates"] = copy.deepcopy(dates_dict)
+
+                    # update time slots of the specific cell
+                    for cell_line in [l for l in range(4, 66) if (l - 4) % 9 < 8]:
+                        cell_data = await parse_cell(worksheet_data[cell_line][i+2])
+                        cell_weekday = (cell_line - 4) // 9
+                        cell_time_slot = (cell_line - 4) % 9
+
+                        if cell_data.get("upper_week") or cell_data.get("lower_week"):
+                            if cell_data.get("upper_week"):
+                                await update_by_cell_data(cell_data["upper_week"], cell_weekday,
+                                                          time_slots[cell_time_slot],
+                                                          worksheet.title, room, start_date, end_date, 1)
+
+                            if cell_data.get("lower_week"):
+                                await update_by_cell_data(cell_data["lower_week"], cell_weekday,
+                                                          time_slots[cell_time_slot],
+                                                          worksheet.title, room, start_date, end_date, 2)
+                        else:
+                            await update_by_cell_data(cell_data, cell_weekday, time_slots[cell_time_slot],
+                                                      worksheet.title, room, start_date, end_date)
 
 
+async def update_by_cell_data(
+        cell_data: dict,
+        cell_weekday,
+        cell_time_slot,
+        worksheet_title,
+        room,
+        start_date,
+        end_date,
+        week: int = 0
+):
+    global temp_data
+
+    # for upper or lower week | 1 = upper | 2 = lower
+    next_class_step = 14 if week != 0 else 7
+
+    new_start_date = date(start_date.year, start_date.month, start_date.day)
+    if week == 1:
+        while not (new_start_date.weekday() == cell_weekday and await is_upper_week(new_start_date)):
+            new_start_date = new_start_date + timedelta(days=1)
+    elif week == 2:
+        while not (new_start_date.weekday() == cell_weekday and not await is_upper_week(new_start_date)):
+            new_start_date = new_start_date + timedelta(days=1)
+
+    # if "all" key is true
+    if cell_data.get("all"):
+        temp_start_date = date(new_start_date.year, new_start_date.month, new_start_date.day)
+        while temp_start_date <= end_date:
+            temp_data[worksheet_title][room]["dates"][temp_start_date][cell_time_slot] = 1
+            temp_start_date = temp_start_date + timedelta(days=next_class_step)
+
+    # if there is a start date and possibly end date values
+    if cell_data.get("start_date") and is_valid_date(cell_data["start_date"], "%d.%m"):
+        # converting string to date type
+        cell_data["start_date"] = datetime.strptime(
+            f"{cell_data['start_date']}.{start_date.year}", "%d.%m.%Y").date()
+        if cell_data["start_date"] < new_start_date:
+            cell_data["start_date"] = date(new_start_date.year, new_start_date.month, new_start_date.day)
+        if cell_data.get("end_date") and is_valid_date(cell_data["end_date"], "%d.%m"):
+            cell_data["end_date"] = datetime.strptime(
+                f"{cell_data['end_date']}.{end_date.year}", "%d.%m.%Y").date()
+            if cell_data["end_date"] > end_date:
+                cell_data["end_date"] = date(end_date.year, end_date.month, end_date.day)
+        else:
+            cell_data["end_date"] = date(end_date.year, end_date.month, end_date.day)
+
+        while cell_data["end_date"] >= cell_data["start_date"]:
+            temp_data[worksheet_title][room]["dates"][cell_data["start_date"]][cell_time_slot] = 1
+            cell_data["start_date"] = cell_data["start_date"] + timedelta(days=next_class_step)
+
+    # if only end date values
+    if cell_data.get("start_date") is None:
+        if cell_data.get("end_date") and is_valid_date(cell_data["end_date"], "%d.%m"):
+            # converting string to date type
+            cell_data["end_date"] = datetime.strptime(
+                f"{cell_data['end_date']}.{end_date.year}", "%d.%m.%Y").date()
+            if cell_data["end_date"] > end_date:
+                cell_data["end_date"] = date(end_date.year, end_date.month, end_date.day)
+            cell_data["start_date"] = date(new_start_date.year, new_start_date.month, new_start_date.day)
+
+            while cell_data["end_date"] >= cell_data["start_date"]:
+                temp_data[worksheet_title][room]["dates"][cell_data["start_date"]][
+                    cell_time_slot] = 1
+                cell_data["start_date"] = cell_data["start_date"] + timedelta(days=next_class_step)
+
+    # free date values
+    if cell_data.get("free_dates"):
+        for free_date_str in cell_data["free_dates"]:
+            # converting string to date type
+            if is_valid_date(free_date_str, "%d.%m"):
+                free_date = datetime.strptime(
+                    f"{free_date_str}.{end_date.year}", "%d.%m.%Y").date()
+                if new_start_date <= free_date <= end_date:
+                    temp_data[worksheet_title][room]["dates"][free_date][cell_time_slot] = 0
+
+    # booked dates
+    if cell_data.get("booked_dates"):
+        for booked_date_str in cell_data["booked_dates"]:
+            # converting string to date type
+            if is_valid_date(booked_date_str, "%d.%m"):
+                booked_date = datetime.strptime(
+                    f"{booked_date_str}.{end_date.year}", "%d.%m.%Y").date()
+                if new_start_date <= booked_date <= end_date:
+                    temp_data[worksheet_title][room]["dates"][booked_date][cell_time_slot] = 1
 
 
 
@@ -139,7 +241,7 @@ async def generate_list_of_dates(start_date: date, end_date: date) -> dict[date,
     :return: Dates with timeslots from start_date to end_date => {date: {time_slot: 0}}
     """
     dates = {}
-    current_date = start_date
+    current_date = date(start_date.year, start_date.month, start_date.day)
     while current_date <= end_date:
         dates[current_date] = {
             "08:00-09:20": 0,
@@ -155,7 +257,7 @@ async def generate_list_of_dates(start_date: date, end_date: date) -> dict[date,
 
     return dates
 
-def parse_cell(sheet_cell: str) -> dict | None:
+async def parse_cell(sheet_cell: str) -> dict | None:
     """
     :param sheet_cell: The cell value from Google Sheet to be parsed
     :return: dict | None if sheet_cell is empty.
@@ -171,10 +273,10 @@ def parse_cell(sheet_cell: str) -> dict | None:
             right = m.group(2).strip()
 
             if left != "":
-                result["upper_week"] = parse_cell(m.group(1).strip())
+                result["upper_week"] = await parse_cell(m.group(1).strip())
 
             if right != "":
-                result["lower_week"] = parse_cell(m.group(2).strip())
+                result["lower_week"] = await parse_cell(m.group(2).strip())
         return result
     else:
         # if cell is empty, return none
@@ -220,15 +322,15 @@ def parse_cell(sheet_cell: str) -> dict | None:
         if "с " in sheet_cell:
             pattern_from = r"с\s+(\d{2}\.\d{2})"
             start_date = re.findall(pattern_from, sheet_cell)
-
-            result["start_date"] = start_date[0]
+            if start_date:
+                result["start_date"] = start_date[0]
 
         # if cell has "до dd.mm", then make end date
         if "до " in sheet_cell:
             pattern_till = r"до\s+(\d{2}\.\d{2})"
             end_date = re.findall(pattern_till, sheet_cell)
-
-            result["end_date"] = end_date[0]
+            if end_date:
+                result["end_date"] = end_date[0]
 
 
         # if start_date and end_date was not decided
@@ -256,6 +358,24 @@ def parse_cell(sheet_cell: str) -> dict | None:
                 result["all"] = True
 
         return result
+
+def is_valid_date(date_string, date_format):
+    """
+    Checks if a given date string is a valid date according to the specified format.
+
+    Args:
+        date_string (str): The date string to validate.
+        date_format (str): The expected format of the date string (e.g., "%Y-%m-%d").
+
+    Returns:
+        bool: True if the date is valid, False otherwise.
+    """
+    try:
+        datetime.strptime(date_string, date_format)
+        return True
+    except ValueError:
+        return False
+
 
 if __name__ == '__main__':
     pass
