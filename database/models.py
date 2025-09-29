@@ -8,10 +8,11 @@ class User(Base):
 
     telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str] = mapped_column(String, nullable=True)
-    first_name: Mapped[str] = mapped_column(String, nullable=False)
+    first_name: Mapped[str] = mapped_column(String, nullable=True)
     last_name: Mapped[str] = mapped_column(String, nullable=True)
     middle_name: Mapped[str] = mapped_column(String, nullable=True)
     phone: Mapped[str] = mapped_column(String, nullable=True)
+    email: Mapped[str] = mapped_column(String, nullable=True)
     user_type: Mapped[str] = mapped_column(String, nullable=True) # student | teacher | employee
 
     # relationships
@@ -25,6 +26,7 @@ class User(Base):
             "last_name": self.last_name,
             "middle_name": self.middle_name,
             "phone": self.phone,
+            "email": self.email,
             "user_type": self.user_type,
             "created_at": self.created_at,
             "updated_at": self.updated_at
