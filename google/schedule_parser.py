@@ -29,10 +29,10 @@ async def load_and_parse(spreadsheet: Spreadsheet):
     metadata = spreadsheet.fetch_sheet_metadata(params={'fields': 'sheets.merges'})
 
     for i, worksheet in enumerate(worksheets):
-
-        if temp_data.get(worksheet.title) is None:
+        worksheet_title = worksheet.title.lower()
+        if temp_data.get(worksheet_title) is None:
             # create key => building address Ex: 'Родионова', 'Б.Печерская', 'Костина', 'Львовская', 'Сормово'
-            temp_data[worksheet.title] = {}
+            temp_data[worksheet_title] = {}
 
             # load all values
             worksheet_data = worksheet.get_all_values()
@@ -57,7 +57,7 @@ async def load_and_parse(spreadsheet: Spreadsheet):
                         worksheet_data[2][i + 2] = ""
 
                     # add room number as key to specific worksheet (building)
-                    temp_data[worksheet.title][room] = {}
+                    temp_data[worksheet_title][room] = {}
 
                     # some equipment is divided by "\n" and some by "/"
                     if "/" in worksheet_data[2][i + 2]:
@@ -65,13 +65,13 @@ async def load_and_parse(spreadsheet: Spreadsheet):
                         worksheet_data[2][i + 2] = worksheet_data[2][i + 2].replace("/", "\n")
 
                     # add list of equipment to specific room
-                    temp_data[worksheet.title][room]["equipment"] = [k.strip().lower() for k in worksheet_data[2][i + 2].split("\n") if k.strip() != ""]
+                    temp_data[worksheet_title][room]["equipment"] = [k.strip().lower() for k in worksheet_data[2][i + 2].split("\n") if k.strip() != ""]
 
                     # add room capacity (max)
-                    temp_data[worksheet.title][room]["capacity"] = worksheet_data[3][i + 2].lower()
+                    temp_data[worksheet_title][room]["capacity"] = worksheet_data[3][i + 2].lower()
 
                     # add dates
-                    temp_data[worksheet.title][room]["dates"] = copy.deepcopy(dates_dict)
+                    temp_data[worksheet_title][room]["dates"] = copy.deepcopy(dates_dict)
 
                     # update time slots of the specific cell
                     for cell_line in [l for l in range(4, 66) if (l - 4) % 9 < 8]:
@@ -83,15 +83,15 @@ async def load_and_parse(spreadsheet: Spreadsheet):
                             if cell_data.get("upper_week"):
                                 await update_by_cell_data(cell_data["upper_week"], cell_weekday,
                                                           time_slots[cell_time_slot],
-                                                          worksheet.title, room, start_date, end_date, 1)
+                                                          worksheet_title, room, start_date, end_date, 1)
 
                             if cell_data.get("lower_week"):
                                 await update_by_cell_data(cell_data["lower_week"], cell_weekday,
                                                           time_slots[cell_time_slot],
-                                                          worksheet.title, room, start_date, end_date, 2)
+                                                          worksheet_title, room, start_date, end_date, 2)
                         else:
                             await update_by_cell_data(cell_data, cell_weekday, time_slots[cell_time_slot],
-                                                      worksheet.title, room, start_date, end_date)
+                                                      worksheet_title, room, start_date, end_date)
 
 
 async def update_by_cell_data(
