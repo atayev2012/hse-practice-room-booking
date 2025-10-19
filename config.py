@@ -1,45 +1,37 @@
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv, set_key
 from datetime import date, datetime
 
-load_dotenv()
-
 class Config:
-    # Telegram Bot data
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-    TELEGRAM_REPORT_CHAT_ID = os.getenv("TELEGRAM_REPORT_CHAT_ID")
+    def __init__(self):
+        self.dotenv_file = find_dotenv()
+        load_dotenv(self.dotenv_file, override=True)
 
-    # Database URL
-    DB_URL = os.getenv("DB_URL")
+        # Telegram Bot data
+        self.TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+        self.TELEGRAM_REPORT_CHAT_ID = os.getenv("TELEGRAM_REPORT_CHAT_ID")
 
-    # Google Spreadsheet API data
-    GOOGLE_TABLE_URL = os.getenv("GOOGLE_TABLE_URL")
-    GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH")
+        # Database URL
+        self.DB_URL = os.getenv("DB_URL")
 
-    # Education modules start and end dates
-    MODULES = {
-        "1": {
-            "start": datetime.strptime(str(os.getenv("MODULE_I_START")),"%d.%m.%Y").date(),
-            "end": datetime.strptime(str(os.getenv("MODULE_I_END")),"%d.%m.%Y").date()
-        },
-        "2": {
-            "start": datetime.strptime(str(os.getenv("MODULE_II_START")), "%d.%m.%Y").date(),
-            "end": datetime.strptime(str(os.getenv("MODULE_II_END")),"%d.%m.%Y").date()
-        },
-        "3": {
-            "start": datetime.strptime(str(os.getenv("MODULE_III_START")),"%d.%m.%Y").date(),
-            "end": datetime.strptime(str(os.getenv("MODULE_III_END")),"%d.%m.%Y").date()
-        },
-        "4": {
-            "start": datetime.strptime(str(os.getenv("MODULE_IV_START")),"%d.%m.%Y").date(),
-            "end": datetime.strptime(str(os.getenv("MODULE_IV_END")),"%d.%m.%Y").date()
-        }
-    }
+        # Google Spreadsheet API data
+        self.GOOGLE_TABLE_URL = os.getenv("GOOGLE_TABLE_URL")
+        self.GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH")
 
+        # Schedule variables
+        self.DAYS_TO_SHOW = int(os.getenv("DAYS_TO_SHOW")) # for how many days ahead to load schedule
+        self.TIMEZONE = int(os.getenv("TIMEZONE")) # desired location timezone
+        self.SCHEDULE_UPDATE_INTERVAL = int(os.getenv("SCHEDULE_UPDATE_INTERVAL")) # update schedule every ??? minutes
+        self.UPPER_WEEK_START_DATE = datetime.strptime(str(os.getenv("UPPER_WEEK_START_DATE")),"%d.%m.%Y").date() # current module upper week start date
+
+    # update specific field in Config() object and .env file
+    def update_attr(self, attribute_name: str, new_value: str):
+        if hasattr(self, attribute_name):
+            set_key(self.dotenv_file, attribute_name, new_value)
+            self.__init__()
+
+# creating sample of config
 config = Config()
 
 if __name__ == "__main__":
-    print(f"MODULE 1 = START: {config.MODULES['1']['start']} | END: {config.MODULES['1']['end']}")
-
-    # print(config.MODULE_I_END)
-    # print(type(config.MODULE_III_START))
+    pass
