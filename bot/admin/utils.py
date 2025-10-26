@@ -92,6 +92,7 @@ async def export_database() -> str | None:
                     if cell_length > max_length:
                         max_length = cell_length
 
+            # Adjust column width based on the longest cell content
             sheet.column_dimensions[column_letter].width = max_length + 2
 
         # Create temporary .xlsx file by saving file
