@@ -51,6 +51,12 @@ async def main_menu_kb() -> ReplyKeyboardMarkup:
         resize_keyboard=True
     )
 
+async def resend_code_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Отправить новый код", callback_data="resend_code")],
+        [InlineKeyboardButton(text="✏️ Изменить email", callback_data="change_email")]
+    ])
+
 # =================================================================
 
 # ========== place handler keyboard markups ===========

@@ -17,12 +17,13 @@ from database.models import User
 # main form text for new and existing users
 async def main_form(user: dict | User, review: bool = False, new_user: bool = True) -> str:
     if new_user and isinstance(user, dict):
+        email_status = "✅ Подтверждён" if user.get('email_verified') else "❌ Не подтверждён"
         base = (
             "📝 Ваши данные\n\n"
             f"• Статус: {user.get('user_type') or '—'}\n"
             f"• ФИО: {user.get('full_name') or '—'}\n"
             f"• Телефон: {user.get('phone') or '—'}\n"
-            f"• Почта: {user.get('email') or '—'}\n\n"
+            f"• Почта: {user.get('email') or '—'} ({email_status})\n\n"
         )
         tail = (
             "Проверьте корректность данных.\n"
@@ -32,11 +33,12 @@ async def main_form(user: dict | User, review: bool = False, new_user: bool = Tr
         )
 
     else:
+        email_status = "✅ Подтверждён" if getattr(user, 'email_verified', False) else "❌ Не подтверждён"
         base = ("С возвращением! Ваш профиль есть в нашей базе.\n\n"
         f"• Статус: {user.user_type}\n"
         f"• ФИО: {user.full_name}\n"
         f"• Телефон: {user.phone}\n"
-        f"• Почта: {user.email}\n\n"
+        f"• Почта: {user.email} ({email_status})\n\n"
         )
         tail = ("Нужно изменить — нажмите кнопку ниже 👇")
 
@@ -111,7 +113,7 @@ async def email_valid(txt: str) -> bool:
 
 # verification of all fields to be filled
 async def all_filled(data: dict) -> bool:
-    return all(data.get(k) for k in ("user_type", "full_name", "phone", "email"))
+    return all(data.get(k) for k in ("user_type", "full_name", "phone", "email")) and data.get("email_verified")
 
 #===============================================
 

@@ -5,10 +5,11 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from database.utils import get_user, update_user, create_user, delete_user
-from bot.keyboards import status_kb, confirm_inline_kb, edit_menu_kb, profile_kb, main_menu_kb
+from bot.keyboards import status_kb, confirm_inline_kb, edit_menu_kb, profile_kb, main_menu_kb, resend_code_kb
 from bot.utils import (main_form, map_user_type, ensure_form_msg, delete_prompt_if_any,
                        phone_valid, restruct_phone, email_valid, all_filled)
 from email_ver.email_verification import Email
+from datetime import datetime, UTC
 
 router = Router()
 
@@ -265,16 +266,18 @@ async def got_phone(m: Message, state: FSMContext):
         prompt = await m.bot.send_message(m.chat.id, "1.4. Укажите корпоративную почту (например: ivanov@hse.ru):")
         await state.update_data(prompt_msg_id=prompt.message_id)
 
+
 # handler of email
 @router.message(UserState.email)
 async def got_email(m: Message, state: FSMContext):
     print(f"Entered email field from {m.text}")
     txt = m.text.strip()
-    if not await email_valid(txt):
 
+    # Validate email format and domain
+    if not await email_valid(txt):
         try:
             await m.delete()
-        except DeprecationWarning as e:
+        except DetailedAiogramError as e:
             print(e)
 
         data = await state.get_data()
@@ -289,51 +292,183 @@ async def got_email(m: Message, state: FSMContext):
         prompt = await m.bot.send_message(m.chat.id, f"Почта некорректна!\nДопустимый домен: {accepted_domain}")
         await state.update_data(prompt_msg_id=prompt.message_id)
     else:
-
         data = await state.get_data()
 
         if data.get("profile_edit") == "email":
-            await update_user(m.from_user.id, **{"email": txt.lower()})
+            # For email editing, send verification code
+            await state.update_data(email=txt.lower(), email_verified=False)
+            await send_verification_code(m, state, txt.lower())
+
+        else:
+            # For new registration, send verification code
+            await state.update_data(email=txt.lower(), email_verified=False)
+            await send_verification_code(m, state, txt.lower())
+
+
+async def send_verification_code(m: Message, state: FSMContext, email: str):
+    """Send verification code to email and transition to verification state"""
+    # Generate and send verification code
+    data = await state.get_data()
+    email_obj = Email(email, data.get("full_name"))
+    await email_obj.send_email()
+
+    # Store verification data
+    await state.update_data(
+        email_verification_code=email_obj.code,
+        email_verification_sent=datetime.now(UTC)
+    )
+
+    # Delete prompt if any
+    await delete_prompt_if_any(state, m)
+
+    try:
+        await m.delete()
+    except DetailedAiogramError as e:
+        print(e)
+
+    # Transition to verification state
+    await state.set_state(UserState.email_code)
+
+    # Different message based on context
+    data = await state.get_data()
+    if data.get("profile_edit") == "email":
+        message_text = f"📧 Код подтверждения отправлен на {email}\n\nВведите код из письма для подтверждения новой почты (действителен 15 минут):"
+    else:
+        message_text = f"📧 Код подтверждения отправлен на {email}\n\nВведите код из письма (действителен 15 минут):"
+
+    prompt = await m.answer(message_text, reply_markup=await resend_code_kb())
+    await state.update_data(prompt_msg_id=prompt.message_id)
+
+
+# handler for email verification code (updated)
+@router.message(UserState.email_code)
+async def verify_email_code(m: Message, state: FSMContext):
+    entered_code = m.text.strip()
+    data = await state.get_data()
+
+    # Check if code has expired (15 minutes)
+    verification_sent = data.get("email_verification_sent")
+    if verification_sent and (datetime.now(UTC) - verification_sent).total_seconds() > 900:  # 15 minutes
+        await delete_prompt_if_any(state, m)
+        try:
+            await m.delete()
+        except DetailedAiogramError as e:
+            print(e)
+
+        prompt = await m.answer(
+            "⏰ Срок действия кода истёк. Выберите действие:",
+            reply_markup=await resend_code_kb()
+        )
+        await state.update_data(prompt_msg_id=prompt.message_id)
+        return
+
+    # Check if code matches
+    if entered_code == data.get("email_verification_code"):
+        await state.update_data(email_verified=True)
+        await delete_prompt_if_any(state, m)
+
+        try:
+            await m.delete()
+        except DetailedAiogramError as e:
+            print(e)
+
+        # Handle based on context (new registration or editing)
+        if data.get("profile_edit") == "email":
+            # Update email in database
+            await update_user(m.from_user.id, **{"email": data.get("email"), "email_verified": True})
             await state.update_data(profile_edit=None)
-            await delete_prompt_if_any(state, m)
 
             try:
-                await m.delete()
                 await m.bot.delete_message(m.from_user.id, data.get("form_msg_id"))
-            except DeprecationWarning as e:
+            except DetailedAiogramError as e:
                 print(e)
 
             user = await get_user(m.from_user.id)
-            await m.bot.send_message(
-                m.chat.id,
-                f"Почта обновлена ✅\n\nВаш профиль:\n• Статус: {user.user_type}\n• ФИО: {user.full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
+            await m.answer(
+                f"✅ Почта подтверждена и обновлена!\n\nВаш профиль:\n"
+                f"• Статус: {user.user_type}\n• ФИО: {user.full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
                 reply_markup=await profile_kb()
             )
         else:
-            await state.update_data(email=txt.lower())
+            # Continue with registration flow
             form_msg_id = await ensure_form_msg(state, m, review=True)
             await m.bot.edit_message_text(
                 chat_id=m.chat.id, message_id=form_msg_id,
                 text=await main_form(await state.get_data(), review=True),
                 reply_markup=await confirm_inline_kb()
             )
-            await delete_prompt_if_any(state, m)
+    else:
+        # Invalid code
+        await delete_prompt_if_any(state, m)
+        try:
+            await m.delete()
+        except DetailedAiogramError as e:
+            print(e)
 
-            try:
-                await m.delete()
-            except DeprecationWarning as e:
-                print(e)
+        prompt = await m.answer(
+            "❌ Неверный код. Попробуйте снова или выберите действие:",
+            reply_markup=await resend_code_kb()
+        )
+        await state.update_data(prompt_msg_id=prompt.message_id)
 
 
-@router.message(UserState.email_verified)
-async def verify_email(m: Message, state: FSMContext):
-    print(f"Entered email verification field")
+# Handler for changing email during verification
+@router.callback_query(UserState.email_code, F.data == "change_email")
+async def change_email_during_verification(cq: CallbackQuery, state: FSMContext):
+    # Clear current email verification data
+    await state.update_data(
+        email_verification_code=None,
+        email_verification_sent=None,
+        email_verified=False
+    )
 
+    # Go back to email input state
+    await state.set_state(UserState.email)
+
+    await delete_prompt_if_any(state, cq.message)
+
+    # Check if this is during profile editing or new registration
     data = await state.get_data()
+    if data.get("profile_edit") == "email":
+        prompt_text = "Введите новую корпоративную почту:"
+    else:
+        prompt_text = "1.4. Укажите корпоративную почту (например: ivanov@hse.ru):"
 
-    email = Email(data.get("email"))
-    await email.send_email()
-    await state.update_data(email_verification_code=email.code)
+    prompt = await cq.message.answer(prompt_text)
+    await state.update_data(prompt_msg_id=prompt.message_id)
+
+    await cq.answer("Введите новый email адрес")
+
+
+# Handler for resending verification code (updated with better feedback)
+@router.callback_query(UserState.email_code, F.data == "resend_code")
+async def resend_verification_code(cq: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    email = data.get("email")
+
+    if email:
+        # Send new verification code
+        email_obj = Email(email)
+        await email_obj.send_email()
+
+        # Update verification data with new code and timestamp
+        await state.update_data(
+            email_verification_code=email_obj.code,
+            email_verification_sent=datetime.now(UTC)
+        )
+
+        await cq.answer("✅ Новый код отправлен на вашу почту!")
+
+        # Update the prompt message to show new code was sent
+        await delete_prompt_if_any(state, cq.message)
+        prompt = await cq.message.answer(
+            f"📧 Новый код подтверждения отправлен на {email}\n\n"
+            "Введите код из письма (действителен 15 минут):",
+            reply_markup=await resend_code_kb()
+        )
+        await state.update_data(prompt_msg_id=prompt.message_id)
+    else:
+        await cq.answer("❌ Ошибка: email не найден", show_alert=True)
 
 
 
@@ -384,12 +519,20 @@ async def change_field(cq: CallbackQuery, state: FSMContext):
         )
     await cq.answer()
 
+
 # handler if all entered data is correct and approved by user
 @router.callback_query(F.data == "ok")
 async def confirm_ok(cq: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+
+    # Check if email is verified
+    if not data.get("email_verified"):
+        await cq.answer("❌ Подтвердите email перед завершением регистрации", show_alert=True)
+        return
+
     if not await all_filled(data):
-        await state.update_data(user_type=None, full_name=None, phone=None, email=None, editing=False, edit_field=None)
+        await state.update_data(user_type=None, full_name=None, phone=None, email=None, email_verified=False,
+                                editing=False, edit_field=None)
         form_msg_id = await ensure_form_msg(state, cq.message, review=False)
         await cq.bot.edit_message_text(
             chat_id=cq.message.chat.id, message_id=form_msg_id,
@@ -400,8 +543,6 @@ async def confirm_ok(cq: CallbackQuery, state: FSMContext):
                                          reply_markup=await status_kb())
         await state.update_data(prompt_msg_id=prompt.message_id)
     else:
-
-
         await create_user(
             cq.from_user.id,
             data["full_name"],
@@ -489,15 +630,8 @@ async def edit_profile(cq: CallbackQuery, state: FSMContext):
                 print(e)
 
             await cq.message.answer(await main_form(user))
-
-
-
-            # data = await state.get_data()
-            # # await delete_prompt_if_any(state, data[""])
-            # await state.update_data(profile_edit=None)
             prompt = await cq.message.answer("Чем займёмся дальше?", reply_markup=await main_menu_kb())
             await state.clear()
-            # await state.update_data(prompt_msg_id=prompt.message_id)
 
         await cq.answer()
 
