@@ -1,13 +1,17 @@
+import copy
+
 from aiogram import Router, F
 from aiogram.exceptions import DetailedAiogramError
 from aiogram.types import CallbackQuery, Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from bot.keyboards import building_kb_place, rooms_kb, confirm_place_kb, main_menu_kb, day_kb
-from bot.utils import (render_place_card, kill_sticky_message, start_time_stage)
+from bot.keyboards import building_kb_place, rooms_kb, confirm_place_kb, main_menu_kb
+from bot.utils import (render_place_card, kill_sticky_message)
 from aiogram.fsm.state import StatesGroup, State
-from shared_data import get_buildings_dict
-
+from bot.handlers.timepick import start_time_stage
+from shared_data import SCHEDULE_SHARED
+from google.utils import DatesRequired
+from database.utils import get_records_by_building_room_date
 
 router = Router()
 
@@ -43,7 +47,7 @@ async def place_start(m: Message, state: FSMContext):
 @router.callback_query(Place.building, F.data.startswith("bld:"))
 async def place_choose_building(cq: CallbackQuery, state: FSMContext):
     code = cq.data.split(":", 1)[1]
-    buildings_dict = await get_buildings_dict()
+    buildings_dict = await SCHEDULE_SHARED.get_buildings_dict()
     title = buildings_dict.get(code, "—")
 
     await state.update_data(
@@ -118,10 +122,10 @@ async def place_redo(cq: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "place:ok")
 async def place_ok(cq: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    bld  = data.get("place_building_title")
-    room = data.get("place_room")
+    building_name  = data.get("place_building_code")
+    room_number = data.get("place_room")
 
-    if not bld or not room:
+    if not building_name or not room_number:
         await cq.message.edit_text(
             text=await render_place_card(await state.get_data(), review=False),
             reply_markup=await building_kb_place()
@@ -136,6 +140,33 @@ async def place_ok(cq: CallbackQuery, state: FSMContext):
         )
     except DetailedAiogramError as e:
         print(e)
+
+    dates_required = DatesRequired()
+
+    final_date_required = []
+    for date_obj in dates_required.dates:
+        records = await get_records_by_building_room_date(building_name, room_number, date_obj.date)
+
+        if records:
+            for record in records:
+                for i in range(len(date_obj.time_slots) - 1, -1, -1):
+                    if record.time_slot_start == date_obj.time_slots[i].start:
+                        date_obj.time_slots.pop(i)
+                        break
+
+        real_slots = await SCHEDULE_SHARED.get_time_slots_by_building_room_weekday(building_name, room_number,
+                                                                                   date_obj.weekday)
+
+        for i in range(len(date_obj.time_slots) - 1, -1, -1):
+            if date_obj.time_slots[i] not in real_slots:
+                date_obj.time_slots.pop(i)
+
+
+
+        if date_obj.time_slots:
+            final_date_required.append(copy.copy(date_obj))
+
+    await state.update_data(dates_required=final_date_required)
 
     # Moving onto next step of choosing time slots
     await start_time_stage(cq.message, state)

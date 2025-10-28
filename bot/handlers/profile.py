@@ -4,10 +4,11 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
-from database.utils import get_user, update_user, user_full_name, create_user, delete_user
+from database.utils import get_user, update_user, create_user, delete_user
 from bot.keyboards import status_kb, confirm_inline_kb, edit_menu_kb, profile_kb, main_menu_kb
 from bot.utils import (main_form, map_user_type, ensure_form_msg, delete_prompt_if_any,
-                       phone_valid, email_valid, all_filled)
+                       phone_valid, restruct_phone, email_valid, all_filled)
+from email_ver.email_verification import Email
 
 router = Router()
 
@@ -16,6 +17,8 @@ class UserState(StatesGroup):
     full_name = State() # full name: last name, first name, middle name
     phone = State() # phone number
     email = State() # email address
+    email_verified = State()
+    email_code = State()  # for entering verification code
 
 
 # handler for /start command
@@ -66,14 +69,13 @@ async def choose_status(cq: CallbackQuery, state: FSMContext):
         # deleting message that contained keyboard of current callback action
         try:
             await cq.message.delete()
+            await cq.message.bot.delete_message(cq.from_user.id, data.get("form_msg_id"))
         except DetailedAiogramError as e:
             print(e)
 
-        # after successful db update and message deletion
-        full_name = await user_full_name(user)
         await cq.message.answer(
             f"Статус обновлён ✅\n\nВаш профиль:\n"
-            f"• Статус: {user.user_type}\n• ФИО: {full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
+            f"• Статус: {user.user_type}\n• ФИО: {user.full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
             reply_markup=await profile_kb()
         )
     # if state data is on editing phase
@@ -134,30 +136,20 @@ async def got_full_name(m: Message, state: FSMContext):
         data = await state.get_data()
 
         if data.get("profile_edit") == "full_name":
-            full_name_data = txt.split()
-
-            # parse full name
-            if len(full_name_data) == 1:
-                full_name_data = [None, full_name_data[0], None]
-            elif len(full_name_data) == 2:
-                full_name_data = [full_name_data[0], full_name_data[1], None]
-            elif len(full_name_data) > 3:
-                full_name_data = [full_name_data[0], full_name_data[1], " ".join(full_name_data[2:])]
-
-            await update_user(m.from_user.id, **{"last_name": full_name_data[0], "first_name": full_name_data[1], "middle_name": full_name_data[2]})
+            await update_user(m.from_user.id, **{"full_name": txt})
             await state.update_data(profile_edit=None)
             await delete_prompt_if_any(state, m)
 
             try:
                 await m.delete()
+                await m.bot.delete_message(m.from_user.id, data.get("form_msg_id"))
             except DetailedAiogramError as e:
                 print(e)
 
             user = await get_user(m.from_user.id)
-            full_name = await user_full_name(user)
             await m.bot.send_message(
                 m.chat.id,
-                f"ФИО обновлено ✅\n\nВаш профиль:\n• Статус: {user.user_type}\n• ФИО: {full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
+                f"ФИО обновлено ✅\n\nВаш профиль:\n• Статус: {user.user_type}\n• ФИО: {user.full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
                 reply_markup=await profile_kb()
             )
 
@@ -216,25 +208,27 @@ async def got_phone(m: Message, state: FSMContext):
     data = await state.get_data()
 
     if data.get("profile_edit") == "phone":
-        await update_user(m.from_user.id, **{"phone": txt})
+        new_phone = await restruct_phone(txt)
+        await update_user(m.from_user.id, **{"phone": new_phone})
         await state.update_data(profile_edit=None)
         await delete_prompt_if_any(state, m)
 
         try:
             await m.delete()
+            await m.bot.delete_message(m.from_user.id, data.get("form_msg_id"))
         except DetailedAiogramError as e:
             print(e)
 
         user = await get_user(m.from_user.id)
-        full_name = await user_full_name(user)
         await m.bot.send_message(
             m.chat.id,
-            f"Телефон обновлён ✅\n\nВаш профиль:\n• Статус: {user.user_type}\n• ФИО: {full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
+            f"Телефон обновлён ✅\n\nВаш профиль:\n• Статус: {user.user_type}\n• ФИО: {user.full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
             reply_markup=await profile_kb()
         )
 
     elif data.get("editing"):
-        await state.update_data(phone=txt)
+        new_phone = await restruct_phone(txt)
+        await state.update_data(phone=new_phone)
         form_msg_id = await ensure_form_msg(state, m, review=True)
 
         await m.bot.edit_message_text(
@@ -253,7 +247,8 @@ async def got_phone(m: Message, state: FSMContext):
         await state.update_data(editing=False, edit_field=None)
         await state.set_state(None)
     else:
-        await state.update_data(phone=txt)
+        new_phone = await restruct_phone(txt)
+        await state.update_data(phone=new_phone)
         form_msg_id = await ensure_form_msg(state, m)
         await m.bot.edit_message_text(
             chat_id=m.chat.id, message_id=form_msg_id,
@@ -273,6 +268,7 @@ async def got_phone(m: Message, state: FSMContext):
 # handler of email
 @router.message(UserState.email)
 async def got_email(m: Message, state: FSMContext):
+    print(f"Entered email field from {m.text}")
     txt = m.text.strip()
     if not await email_valid(txt):
 
@@ -281,32 +277,40 @@ async def got_email(m: Message, state: FSMContext):
         except DeprecationWarning as e:
             print(e)
 
+        data = await state.get_data()
         await delete_prompt_if_any(state, m)
-        prompt = await m.bot.send_message(m.chat.id, "Почта некорректна. Попробуйте ещё раз:")
+
+        if data.get("user_type"):
+            accepted_domain = "@edu.hse.ru" if data.get("user_type") == "Студент" else "@hse.ru"
+        else:
+            user = await get_user(m.from_user.id)
+            accepted_domain = "@edu.hse.ru" if user.user_type == "Студент" else "@hse.ru"
+
+        prompt = await m.bot.send_message(m.chat.id, f"Почта некорректна!\nДопустимый домен: {accepted_domain}")
         await state.update_data(prompt_msg_id=prompt.message_id)
     else:
 
         data = await state.get_data()
 
         if data.get("profile_edit") == "email":
-            await update_user(m.from_user.id, **{"email": txt})
+            await update_user(m.from_user.id, **{"email": txt.lower()})
             await state.update_data(profile_edit=None)
             await delete_prompt_if_any(state, m)
 
             try:
                 await m.delete()
+                await m.bot.delete_message(m.from_user.id, data.get("form_msg_id"))
             except DeprecationWarning as e:
                 print(e)
 
             user = await get_user(m.from_user.id)
-            full_name = await user_full_name(user)
             await m.bot.send_message(
                 m.chat.id,
-                f"Почта обновлена ✅\n\nВаш профиль:\n• Статус: {user.user_type}\n• ФИО: {full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
+                f"Почта обновлена ✅\n\nВаш профиль:\n• Статус: {user.user_type}\n• ФИО: {user.full_name}\n• Телефон: {user.phone}\n• Почта: {user.email}",
                 reply_markup=await profile_kb()
             )
         else:
-            await state.update_data(email=txt)
+            await state.update_data(email=txt.lower())
             form_msg_id = await ensure_form_msg(state, m, review=True)
             await m.bot.edit_message_text(
                 chat_id=m.chat.id, message_id=form_msg_id,
@@ -319,6 +323,18 @@ async def got_email(m: Message, state: FSMContext):
                 await m.delete()
             except DeprecationWarning as e:
                 print(e)
+
+
+@router.message(UserState.email_verified)
+async def verify_email(m: Message, state: FSMContext):
+    print(f"Entered email verification field")
+
+    data = await state.get_data()
+
+    email = Email(data.get("email"))
+    await email.send_email()
+    await state.update_data(email_verification_code=email.code)
+
 
 
 # handler for changing data that was entered before (user_type, full_name, phone, email)
@@ -340,10 +356,13 @@ async def change_field(cq: CallbackQuery, state: FSMContext):
     await state.update_data(editing=True, edit_field=what)
     await delete_prompt_if_any(state, cq.message)
 
+    print("Entered change menu")
+
     if what == "user_type":
         await state.set_state(UserState.user_type)
         prompt = await cq.message.answer("Выберите новый статус:", reply_markup=await status_kb())
         await state.update_data(prompt_msg_id=prompt.message_id)
+        print("Entered change user_type")
     elif what == "full_name":
         await state.set_state(UserState.full_name)
         prompt = await cq.message.answer("Введите новое ФИО:")
@@ -381,21 +400,12 @@ async def confirm_ok(cq: CallbackQuery, state: FSMContext):
                                          reply_markup=await status_kb())
         await state.update_data(prompt_msg_id=prompt.message_id)
     else:
-        full_name_data = data["full_name"].split()
 
-        if len(full_name_data) == 1:
-            full_name_data = [None, full_name_data[0], None]
-        elif len(full_name_data) == 2:
-            full_name_data = [full_name_data[0], full_name_data[1], None]
-        elif len(full_name_data) > 3:
-            full_name_data = [full_name_data[0], full_name_data[1], " ".join(full_name_data[2:])]
 
         await create_user(
             cq.from_user.id,
-            full_name_data[1],
+            data["full_name"],
             cq.from_user.username,
-            full_name_data[0],
-            full_name_data[2],
             data["phone"],
             data["email"],
             data["user_type"]
@@ -440,26 +450,54 @@ async def edit_profile(cq: CallbackQuery, state: FSMContext):
         if action == "user_type":
             await state.update_data(profile_edit="user_type")
             await state.set_state(UserState.user_type)
+            await state.update_data(form_msg_id=cq.message.message_id)
+            await cq.message.edit_reply_markup(str(cq.message.message_id), reply_markup=None)
             prompt = await cq.message.answer("Выберите новый статус:", reply_markup=await status_kb())
             await state.update_data(prompt_msg_id=prompt.message_id)
 
         elif action == "full_name":
             await state.update_data(profile_edit="full_name")
             await state.set_state(UserState.full_name)
+            await state.update_data(form_msg_id=cq.message.message_id)
+            await cq.message.edit_reply_markup(str(cq.message.message_id), reply_markup=None)
             prompt = await cq.message.answer("Введите новое ФИО:")
             await state.update_data(prompt_msg_id=prompt.message_id)
 
         elif action == "phone":
             await state.update_data(profile_edit="phone")
             await state.set_state(UserState.phone)
+            await state.update_data(form_msg_id=cq.message.message_id)
+            await cq.message.edit_reply_markup(str(cq.message.message_id), reply_markup=None)
             prompt = await cq.message.answer("Введите новый телефон:")
             await state.update_data(prompt_msg_id=prompt.message_id)
 
         elif action == "email":
             await state.update_data(profile_edit="email")
             await state.set_state(UserState.email)
+            await state.update_data(form_msg_id=cq.message.message_id)
+            await cq.message.edit_reply_markup(str(cq.message.message_id), reply_markup=None)
             prompt = await cq.message.answer("Введите новую корпоративную почту:")
             await state.update_data(prompt_msg_id=prompt.message_id)
+
+        elif action == "back":
+            user = await get_user(uid)
+
+            # deleting message that contained keyboard of current callback action
+            try:
+                await cq.message.delete()
+            except DetailedAiogramError as e:
+                print(e)
+
+            await cq.message.answer(await main_form(user))
+
+
+
+            # data = await state.get_data()
+            # # await delete_prompt_if_any(state, data[""])
+            # await state.update_data(profile_edit=None)
+            prompt = await cq.message.answer("Чем займёмся дальше?", reply_markup=await main_menu_kb())
+            await state.clear()
+            # await state.update_data(prompt_msg_id=prompt.message_id)
 
         await cq.answer()
 
@@ -472,7 +510,7 @@ async def show_profile_btn(m: Message):
         await m.answer("Профиль не найден. Нажмите /start для регистрации.")
     else:
         await m.answer(
-            f"Ваш профиль:\n• Статус: {user.user_type}\n• ФИО: {await user_full_name(user)}"
+            f"Ваш профиль:\n• Статус: {user.user_type}\n• ФИО: {user.full_name}"
             f"\n• Телефон: {user.phone}\n• Почта: {user.email}",
             reply_markup=await profile_kb()
         )
@@ -490,4 +528,4 @@ async def cmd_cancel(m: Message, state: FSMContext):
     except DetailedAiogramError as e:
         print(e)
     await state.clear()
-    await m.answer("Ок, начало заново. Нажмите /start, чтобы повторить.", reply_markup=await main_menu_kb())
+    await m.answer("Ок, начнём заново. Нажмите /start, чтобы повторить.", reply_markup=await main_menu_kb())
