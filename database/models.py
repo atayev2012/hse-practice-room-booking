@@ -9,7 +9,6 @@ class User(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str] = mapped_column(String, nullable=True)
     full_name: Mapped[str] = mapped_column(String, nullable=True)
-    phone: Mapped[str] = mapped_column(String, nullable=True)
     email: Mapped[str] = mapped_column(String, nullable=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     user_type: Mapped[str] = mapped_column(String, nullable=True) # student | teacher | employee
@@ -22,7 +21,6 @@ class User(Base):
             "telegram_id": self.telegram_id,
             "username": self.username,
             "full_name": self.full_name,
-            "phone": self.phone,
             "email": self.email,
             "email_verified": self.email_verified,
             "user_type": self.user_type,

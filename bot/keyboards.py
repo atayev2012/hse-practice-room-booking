@@ -27,7 +27,7 @@ async def edit_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Статус",  callback_data="chg:user_type")],
         [InlineKeyboardButton(text="ФИО",     callback_data="chg:full_name")],
-        [InlineKeyboardButton(text="Телефон", callback_data="chg:phone")],
+        # [InlineKeyboardButton(text="Телефон", callback_data="chg:phone")],
         [InlineKeyboardButton(text="Почта",   callback_data="chg:email")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="chg:back")],
     ])
@@ -36,7 +36,7 @@ async def profile_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Изменить статус",  callback_data="edit:user_type")],
         [InlineKeyboardButton(text="Изменить ФИО",     callback_data="edit:full_name")],
-        [InlineKeyboardButton(text="Изменить телефон", callback_data="edit:phone")],
+        # [InlineKeyboardButton(text="Изменить телефон", callback_data="edit:phone")],
         [InlineKeyboardButton(text="Изменить почту",   callback_data="edit:email")],
         [InlineKeyboardButton(text="Сбросить профиль", callback_data="edit:reset")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="edit:back")],

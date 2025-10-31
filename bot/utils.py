@@ -22,7 +22,7 @@ async def main_form(user: dict | User, review: bool = False, new_user: bool = Tr
             "📝 Ваши данные\n\n"
             f"• Статус: {user.get('user_type') or '—'}\n"
             f"• ФИО: {user.get('full_name') or '—'}\n"
-            f"• Телефон: {user.get('phone') or '—'}\n"
+            # f"• Телефон: {user.get('phone') or '—'}\n"
             f"• Почта: {user.get('email') or '—'} ({email_status})\n\n"
         )
         tail = (
@@ -37,7 +37,7 @@ async def main_form(user: dict | User, review: bool = False, new_user: bool = Tr
         base = ("С возвращением! Ваш профиль есть в нашей базе.\n\n"
         f"• Статус: {user.user_type}\n"
         f"• ФИО: {user.full_name}\n"
-        f"• Телефон: {user.phone}\n"
+        # f"• Телефон: {user.phone}\n"
         f"• Почта: {user.email} ({email_status})\n\n"
         )
         tail = ("Нужно изменить — нажмите кнопку ниже 👇")
@@ -63,7 +63,7 @@ async def ensure_form_msg(state: FSMContext, msg: Message, review: bool = False)
     payload = {
         "status": data.get("status"),
         "full_name": data.get("full_name"),
-        "phone": data.get("phone"),
+        # "phone": data.get("phone"),
         "email": data.get("email"),
     }
     new_msg = await msg.answer(await main_form(payload, review=review))
@@ -113,7 +113,7 @@ async def email_valid(txt: str) -> bool:
 
 # verification of all fields to be filled
 async def all_filled(data: dict) -> bool:
-    return all(data.get(k) for k in ("user_type", "full_name", "phone", "email")) and data.get("email_verified")
+    return all(data.get(k) for k in ("user_type", "full_name", "email")) and data.get("email_verified")
 
 #===============================================
 

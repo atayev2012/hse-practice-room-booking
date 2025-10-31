@@ -14,7 +14,6 @@ async def create_user(
     telegram_id: int,
     full_name: str,
     username: str | None = None,
-    phone: str | None = None,
     email: str | None = None,
     user_type: str | None = None
 ) -> User:
@@ -24,7 +23,6 @@ async def create_user(
                 telegram_id=telegram_id,
                 full_name=full_name,
                 username=username,
-                phone=phone,
                 email=email,
                 user_type=user_type,
                 email_verified=True  # Set to True since we verified it
