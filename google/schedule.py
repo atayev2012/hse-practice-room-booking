@@ -16,6 +16,16 @@ BUILDINGS = {
     "костина": "ул. Костина, 2",
 }
 
+TIME_SLOTS = [
+    {"start": time(hour=8, minute=0), "end": time(hour=9, minute=20)},
+    {"start": time(hour=9, minute=30), "end": time(hour=10, minute=50)},
+    {"start": time(hour=11, minute=10), "end": time(hour=12, minute=30)},
+    {"start": time(hour=13, minute=0), "end": time(hour=14, minute=20)},
+    {"start": time(hour=14, minute=40), "end": time(hour=16, minute=0)},
+    {"start": time(hour=16, minute=20), "end": time(hour=17, minute=40)},
+    {"start": time(hour=18, minute=10), "end": time(hour=19, minute=30)},
+    {"start": time(hour=19, minute=40), "end": time(hour=21, minute=0)}
+]
 
 # Status of time slot if it is free or not
 class TimeSlotStatus:
@@ -50,6 +60,16 @@ class TimeSlot:
         self.start = start
         self.end = end
         self.status = TimeSlotStatus()
+
+
+    def export_for_keyboard(self):
+        class_period = 1
+        for i in range(len(TIME_SLOTS)):
+            if self.start == TIME_SLOTS[i]["start"]:
+                class_period += i
+                break
+
+        return class_period, f"{self.start.strftime('%H:%M')}-{self.end.strftime('%H:%M')}"
 
     def __copy__(self):
         new_item = TimeSlot(
@@ -99,6 +119,9 @@ class DateCell:
 
         if is_new:
             self.__set_time_slots()
+
+    def date_to_str(self):
+        return datetime.strftime(self.date, "%d.%m.%Y")
 
     def __set_time_slots(self):
         for slot in self.time_slots_template:
@@ -199,6 +222,63 @@ class ScheduleCalendar:
                     break
 
         return rooms
+
+    async def get_rooms_by_capacity(self, building_name: str, capacity_range: str, as_numbers: bool = False):
+        """Get rooms filtered by capacity range"""
+        rooms = []
+        async with self.lock:
+            for building in self.buildings:
+                if building.building_name == building_name:
+                    for room in building.rooms:
+                        if self._room_matches_capacity(room, capacity_range):
+                            if as_numbers:
+                                rooms.append(room.room_number)
+                            else:
+                                rooms.append(room)
+                    break
+        return rooms
+
+    def _room_matches_capacity(self, room: Room, capacity_range: str) -> bool:
+        """Check if room matches capacity requirements"""
+        if not room.capacity:
+            return False
+
+        if capacity_range == "small":
+            return room.capacity < 30
+        elif capacity_range == "medium":
+            return 30 <= room.capacity <= 60
+        elif capacity_range == "large":
+            return room.capacity > 60
+        return False
+
+    async def get_room_by_number(self, building_name: str, room_number: str) -> Room:
+        """Get room object by building and room number"""
+        async with self.lock:
+            for building in self.buildings:
+                if building.building_name == building_name:
+                    for room in building.rooms:
+                        if room.room_number == room_number:
+                            return room
+        return None
+
+    async def update_room_slot_status(self, building_name: str, room_number: str,
+                                      target_date: date, time_slot: TimeSlot,
+                                      is_free: bool, name: str = None):
+        """Update room slot status in shared schedule"""
+        async with self.lock:
+            for building in self.buildings:
+                if building.building_name == building_name:
+                    for room in building.rooms:
+                        if room.room_number == room_number:
+                            for date_cell in room.dates:
+                                if date_cell.date == target_date:
+                                    for slot in date_cell.time_slots:
+                                        if slot.start == time_slot.start and slot.end == time_slot.end:
+                                            slot.status.is_free = is_free
+                                            if name:
+                                                slot.status.name = name
+                                            return True
+        return False
 
     async def update_schedule(self):
         async with self.lock:
@@ -313,7 +393,7 @@ class ScheduleCalendar:
 
                             if record:
                                 new_room.dates[k].time_slots[l].status.is_free = False
-                                new_room.dates[k].time_slots[l].status.name = record.user.full_name
+                                new_room.dates[k].time_slots[l].status.name = record.user.full_name if record.user else None
                                 new_room.dates[k].time_slots[l].status.comment = None
 
                 # Adding room to rooms list

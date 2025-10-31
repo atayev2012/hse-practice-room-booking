@@ -13,6 +13,7 @@ class Config:
 
         # Database URL
         self.DB_URL = os.getenv("DB_URL")
+        self.DAYS_TO_LOAD_FROM_DB = int(os.getenv("DAYS_TO_LOAD_FROM_DB"))
 
         # Google Spreadsheet API data
         self.GOOGLE_TABLE_URL = os.getenv("GOOGLE_TABLE_URL")
@@ -23,6 +24,12 @@ class Config:
         self.TIMEZONE = int(os.getenv("TIMEZONE")) # desired location timezone
         self.SCHEDULE_UPDATE_INTERVAL = int(os.getenv("SCHEDULE_UPDATE_INTERVAL")) # update schedule every ??? minutes
         self.UPPER_WEEK_START_DATE = datetime.strptime(str(os.getenv("UPPER_WEEK_START_DATE")),"%d.%m.%Y").date() # current module upper week start date
+
+        # Gmail - emailing variables
+        self.EMAIL = os.getenv("EMAIL")
+        self.EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+        self.SMTP_SERVER = os.getenv("SMTP_SERVER")
+        self.SMTP_PORT = int(os.getenv("SMTP_PORT"))
 
     # update specific field in Config() object and .env file
     def update_attr(self, attribute_name: str, new_value: str):
